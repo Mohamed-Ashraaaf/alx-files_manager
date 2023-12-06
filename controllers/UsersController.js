@@ -1,39 +1,40 @@
-import { v4 as uuidv4 } from 'uuid';
+/* eslint-disable import/no-named-as-default */
 import sha1 from 'sha1';
+import Queue from 'bull/lib/queue';
 import dbClient from '../utils/db';
 
-const UsersController = {
-  async postNew(req, res) {
-    const { email, password } = req.body;
+const userQueue = new Queue('email sending');
+
+export default class UsersController {
+  static async postNew(req, res) {
+    const email = req.body ? req.body.email : null;
+    const password = req.body ? req.body.password : null;
 
     if (!email) {
-      return res.status(400).json({ error: 'Missing email' });
+      res.status(400).json({ error: 'Missing email' });
+      return;
     }
-
     if (!password) {
-      return res.status(400).json({ error: 'Missing password' });
+      res.status(400).json({ error: 'Missing password' });
+      return;
     }
+    const user = await (await dbClient.usersCollection()).findOne({ email });
 
-    const userExists = await dbClient.db.collection('users').findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ error: 'Already exist' });
+    if (user) {
+      res.status(400).json({ error: 'Already exist' });
+      return;
     }
+    const insertionInfo = await (await dbClient.usersCollection())
+      .insertOne({ email, password: sha1(password) });
+    const userId = insertionInfo.insertedId.toString();
 
-    const hashedPassword = sha1(password);
-    const newUser = {
-      email,
-      password: hashedPassword,
-    };
+    userQueue.add({ userId });
+    res.status(201).json({ email, id: userId });
+  }
 
-    try {
-      const result = await dbClient.db.collection('users').insertOne(newUser);
-      const { _id: id } = result.ops[0];
+  static async getMe(req, res) {
+    const { user } = req;
 
-      res.status(201).json({ id, email });
-    } catch (err) {
-      return res.status(500).json({ error: 'Server error' });
-    }
-  },
-};
-
-export default UsersController;
+    res.status(200).json({ email: user.email, id: user._id.toString() });
+  }
+}
